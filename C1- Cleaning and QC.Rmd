@@ -1,0 +1,149 @@
+---
+title: 'Chapter 1: Data cleaning and QC'
+output: html_document
+date: "2023-07-11"
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE) #prevents R printing code that generated the plot 
+
+```
+
+**Importing peptide and prefeast data**
+```{r}
+
+#load packages
+library(openxlsx)
+library(data.table)
+library(tibble)
+library(dplyr)
+library(tidyverse)
+
+file_path1 <- "Input files/QuantSheet_Peptide_40-225.xlsx"
+worksheet_name1 <- "Main"
+post_dem <- read.xlsx(file_path1, sheet = worksheet_name1, rows = c(1:9), cols = c(27:132))
+post_prot <- read.xlsx(file_path1, sheet = worksheet_name1, rows = c(10:4278), cols = c(1:8, 27:129))
+
+file_path2 <- "Input files/QuantSheet_PreFeaST_40-225.xlsx"
+worksheet_name2 <- "PreFeaST_"
+pre_dem <- read.xlsx(file_path2, sheet = worksheet_name2, rows = c(1:9), cols = c(9:26, 28:44, 46:62, 64:80, 82:98, 100:116))
+pre_prot <- read.xlsx(file_path2, sheet = worksheet_name2, rows = c(10:20581), cols = c(1:26, 28:44, 46:62, 64:80, 82:98, 100:116))
+
+rosmap <- read.xlsx("Input files/Rush_ROSMAP.xlsx")
+
+```
+
+**Filter pre_prot to only show X1s that appear in post_prot**
+```{r}
+
+pre_prot <- pre_prot %>% 
+  filter(pre_prot$X1 %in% post_prot$X1) 
+
+```
+
+**Pivot proteomic tables and join demographic information**
+```{r}
+
+#post-feast data
+post_prot <- pivot_longer(post_prot, cols = TMT01_126:TMT06_134C, names_to = "SampleCode", values_to = "Quant")
+post_dem <- post_dem %>%
+  pivot_longer(-X1, names_to = "SampleCode", values_to = "Val") %>%
+  pivot_wider(names_from = X1, values_from = Val)
+post_full_data <- left_join(x=post_prot, y=post_dem, by=c("SampleCode"))
+
+#pre-feast data
+pre_prot <- pivot_longer(pre_prot, cols = TMT01_126:TMT06_134C, names_to = "SampleCode", values_to = "Quant")
+pre_dem <- pre_dem %>%
+  pivot_longer(-X1, names_to = "SampleCode", values_to = "Val") %>%
+  pivot_wider(names_from = X1, values_from = Val)
+pre_full_data <- left_join(x=pre_prot, y=pre_dem, by=c("SampleCode"))
+
+identical(post_full_data$X1, pre_full_data$X1)
+
+```
+
+**Compare pre and post-feast data, make values NaN in post that are NaN in pre**
+```{r}
+
+post_full_data2 <- cbind(post_full_data, pre_full_data$Quant) 
+post_full_data2$logicvector <- is.na(post_full_data2$"pre_full_data$Quant")
+post_full_data2$Quant[post_full_data2$logicvector] <- NA
+full_data <- select(post_full_data2, -c("pre_full_data$Quant", logicvector))
+
+```
+
+**Summary table to include/exclude peptides**
+```{r}
+
+#any peptides with more than 20% missing values should be excluded from further analysis. We have 102 participants so any peptide with more than 20 missing values will be excluded
+
+NAcounts <- full_data %>%
+  group_by(X1) %>%
+  summarise(NAcount = sum(is.na(Quant))) 
+peptides_to_keep <- NAcounts[-which(NAcounts$NAcount > 20),] #deletes values in NAcounts that exceed 20, keeps all else
+
+```
+
+**Apply NA counts to main data table to delete peptides where NA>20**
+```{r}
+
+nice_table <- full_data[full_data$X1 %in% peptides_to_keep$X1, ] #only keep peptide IDs that are in peptides_to_keep
+nice_table_prefeast <- pre_full_data[pre_full_data$X1 %in% peptides_to_keep$X1, ] #only keep peptide IDs that are in peptides_to_keep
+
+```
+
+**Get peptide IDs into nice_table and save it as a table**
+```{r}
+
+#make a table with the necessary info to make peptide IDs
+nametable <- cbind(FullPeptide=nice_table$X1, Sequence=nice_table$Sequence, GNP=nice_table$GeneNamePreferred)
+nametable <- data.frame(nametable)
+
+#make peptide IDs
+nametable <- nametable %>%
+  mutate(after_pipe = ifelse(str_detect(GNP, "\\|"), str_extract(GNP, "(?<=\\|).*"), GNP)) %>% #if there is a | (pipe), remove anything before it
+  mutate(before_pipe = ifelse(str_detect(after_pipe, "\\|"), str_replace(after_pipe, "\\|.*$", ""), after_pipe)) %>% #if there is a |, remove anything after it
+  mutate(GeneName = str_replace(before_pipe, "GN_", "")) %>% 
+  select(-c(GNP, after_pipe, before_pipe)) %>%
+  mutate(AALength = str_length(Sequence)) %>% #counts the number of AAs in a peptide
+  mutate(firstfour = str_extract(nametable$Sequence, "^.{4}")) %>% #get the first 4 letters of each sequence
+  unite(FullPeptideID, c(GeneName, firstfour, AALength), remove=FALSE) #put together gene name, firstfour and length, split by '_'
+
+#distinction between post-mods by adding _B
+nametable <- nametable %>%
+  unique() %>%
+  group_by(FullPeptideID) %>%
+  mutate(rank_col = seq_along(FullPeptide)) %>%
+  mutate(FullPeptideID = if_else(rank_col == 2, paste0(FullPeptideID, "_B"), FullPeptideID,)) %>% #add _B for top 6 to show that they are different
+  ungroup()
+
+nice_table <- merge(nametable, nice_table, by.x = "FullPeptide", by.y = "X1", all = TRUE) #merge table with new ranks 
+
+write_csv(nice_table, "Output files/nice_table.csv")
+
+```
+
+**Join with extra RADC variables**
+````{r}
+
+#get dataframe of unique sampleIDs
+sampleIDs <- as.data.frame(nice_table$sampleID_Client)
+sampleIDs <- sampleIDs %>% 
+  rename(sampleID = "nice_table$sampleID_Client") %>%
+  unique()
+
+#select columns wanted from big rosmap spreadsheet
+rosmap_small <- rosmap %>%
+  select(projid, cogn_global_lv, gpath, pmi, braaksc, educ, cts_mmse30_lv)
+
+#filter for shared peptides and merge to nice_table
+rosmap_small$projid <- as.character(rosmap_small$projid)
+filtered_rosmap <- semi_join(rosmap_small, sampleIDs, by = c("projid" = "sampleID"))
+filtered_rosmap2 <- filtered_rosmap[rep(seq_len(nrow(filtered_rosmap)), each = 3696), ]
+nice_table2 <- merge(x = filtered_rosmap, y = nice_table, by.x = "projid", by.y = "sampleID_Client")
+
+write_csv(nice_table2, "Output files/nice_table2.csv")
+
+```
+
