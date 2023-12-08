@@ -1,0 +1,411 @@
+---
+title: "Chapter 2: Linear model"
+output: html_document
+date: "2023-07-11"
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE) 
+
+```
+
+**Import pre-processed data**
+```{r}
+
+nice_table <- read.csv("Output files/nice_table.csv")
+nice_table2 <- read.csv("Output files/nice_table2.csv")
+rosmap <- read.xlsx("Input files/Rush_ROSMAP.xlsx")
+
+```
+
+**Run class1 discrete linear models**
+```{r}
+
+#install.packages("broom")
+library(broom)
+
+#change class1 from categorical to factor, age from factor to numeric, and gender from chr to factor
+nice_table2$class1 <- factor(nice_table2$class1)
+nice_table2$age <- as.numeric(nice_table2$age)
+nice_table2$gender <- factor(nice_table2$gender)
+
+#lm1 - Control reference factor model
+nice_table2$class1 <- relevel(nice_table2$class1, ref = "Control")
+
+linmodcont <- nice_table2 %>% 
+  nest_by(FullPeptide) %>%
+  mutate(LinearModel = list(lm(Quant ~ class1 + age + gender + pmi + educ, data = data, na.action = na.omit))) %>%
+  summarise(tidy(LinearModel))
+linmodcont <- linmodcont %>%
+  mutate(Reference = nice_table2$class1[4]) %>%
+  mutate(Reference = case_when(str_starts(term, "class1") ~ "Control", term == "genderm" ~ "Female", term == "age" ~ " ", term == "educ" ~ " ", term == "pmi" ~ " ", term == "(Intercept)" ~ " ", TRUE ~ Reference)) %>% #add comparisons
+  relocate(Reference, .before=estimate) #move reference column to start to make it clearer
+
+#lm2 - Dementia reference factor
+nice_table2$class1 <- relevel(nice_table2$class1, ref = "Dementia")
+
+linmoddem <- nice_table2 %>%
+  nest_by(FullPeptide) %>%
+  mutate(LinearModel = list(lm(Quant ~ class1 + age + gender + pmi + educ, data = data, na.action = na.omit))) %>%
+  summarise(tidy(LinearModel))
+linmoddem <- linmoddem %>%
+  mutate(Reference = nice_table2$class1[1]) %>%
+  mutate(Reference = case_when(str_starts(term, "class1") ~ "Dementia", term == "genderm" ~ "Female", term == "age" ~ " ", term == "educ" ~ " ", term == "pmi" ~ " ", term == "(Intercept)" ~ " ", TRUE ~ Reference)) %>% #add comparisons
+  relocate(Reference, .before=estimate) #move reference column to start to make it clearer
+
+#lm3 - Resilient reference factor
+nice_table$class2 <- relevel(nice_table2$class1, ref = "Resilient")
+
+linmodres <- nice_table2 %>%
+  nest_by(FullPeptide) %>%
+  mutate(LinearModel = list(lm(Quant ~ class1 + age + gender + pmi + educ, data = data, na.action = na.omit))) %>%  
+  summarise(tidy(LinearModel))
+linmodres <- linmodres %>%
+  mutate(Reference = nice_table2$class1[2]) %>%
+  mutate(Reference = case_when(str_starts(term, "class1") ~ "Resilient", term == "genderm" ~ "Female", term == "age" ~ " ", term == "educ" ~ " ", term == "pmi" ~ " ", term == "(Intercept)" ~ " ", TRUE ~ Reference)) %>% #add comparisons  
+  relocate(Reference, .before=estimate) #move reference column to start to make it clearer
+
+
+```
+
+**Making summary tables for explanatory variables by peptide - class1**
+```{r}
+
+#class1 table - make summary tables
+class1tablecont <- linmodcont %>%
+  filter(str_detect(term, '^class1')) #extracts all class comparisons
+
+class1tabledem <- linmoddem %>%
+  filter(str_detect(term, '^class1')) %>%
+  filter(!(str_detect(term, '^class1C'))) #extracts dem vs res and dem vs frail
+ 
+class1tableres <- linmodres %>%
+  filter(str_detect(term, '^class1F')) #extracts res vs frail only
+ 
+#collate summary tables
+class1tableall <- rbind(class1tablecont, class1tabledem, class1tableres)
+class1tableall <- class1tableall %>%
+  arrange(FullPeptide) #all comparisons of one peptide shown together (6 for each)
+
+class1tableall <- class1tableall %>%
+ mutate(padjBH = p.adjust(p.value, method = "BH")) %>%
+  mutate(significance = ifelse(padjBH < 0.05, "significant", "ns"))
+
+#filter for most significant p-values
+class1tablesignificant <- class1tableall %>%
+  filter(significance == "significant") 
+class1tableall <- merge(x = class1tableall, y = nice_table[ , c("FullPeptideID", "FullPeptide")], by = "FullPeptide", all = TRUE)
+class1tableall <- class1tableall %>%
+  unique() %>%
+  na.omit()
+
+write_csv(class1tableall, "Output files/class1tableall.csv")
+
+class1tablesignificant <- merge(x = class1tablesignificant, y = nice_table[ , c("FullPeptideID", "FullPeptide")], by = "FullPeptide", all = TRUE)
+class1tablesignificant <- class1tablesignificant %>%
+  unique() %>%
+  na.omit() %>%
+  arrange(padjBH)
+
+write_csv(class1tablesignificant, "Output files/class1tablesignificant.csv")
+
+```
+
+**Making summary tables for explanatory variables by peptide - age**
+```{r}
+
+agetable <- linmodcont %>%
+  filter(term == "age") %>%
+  mutate(padjBH = p.adjust(p.value, method = "BH")) %>%
+  mutate(significance = ifelse(padjBH < 0.05, "significant", "ns"))
+
+#filter for most significant p-values
+agetablesignificant <- agetable %>%
+  filter(significance == "significant") %>%
+  arrange(padjBH) #sorts in order of smallest to largest p value (most significant comparisons shown first)
+
+agetable <- merge(x = agetable, y = nice_table[ , c("FullPeptideID", "FullPeptide")], by = "FullPeptide", all = TRUE)
+agetable <- agetable %>%
+  unique() %>%
+  na.omit()
+
+write_csv(agetable, "Output files/agetable.csv")
+
+agetablesignificant <- merge(x = agetablesignificant, y = nice_table[ , c("FullPeptideID", "FullPeptide")], by = "FullPeptide", all = TRUE)
+agetablesignificant <- agetablesignificant %>%
+  unique() %>%
+  na.omit() %>%
+  arrange(padjBH)
+downregulated_peptides_age <- sum(agetablesignificant$estimate < 0)
+
+write_csv(agetablesignificant, "Output files/agetablesignificant.csv")
+
+```
+
+**Making summary tables for explanatory variables by peptide - gender**
+```{r}
+
+gendertable <- linmodcont %>%
+  filter(term == "genderm") %>%
+  mutate(padjBH = p.adjust(p.value, method = "BH")) %>%
+  mutate(significance = ifelse(padjBH < 0.05, "significant", "ns"))
+
+#filter for most significant p-values
+gendertablesignificant <- gendertable %>%
+  filter(significance == "significant") %>%
+  arrange(padjBH) #sorts in order of smallest to largest p value (most significant comparisons shown first)
+
+gendertable <- merge(x = gendertable, y = nice_table[ , c("FullPeptideID", "FullPeptide")], by = "FullPeptide", all = TRUE)
+gendertable <- gendertable %>%
+  unique() %>%
+  na.omit()
+
+write_csv(gendertable, "Output files/gendertable.csv")
+
+gendertablesignificant <- merge(x = gendertablesignificant, y = nice_table[ , c("FullPeptideID", "FullPeptide")], by = "FullPeptide", all = TRUE)
+gendertablesignificant <- gendertablesignificant %>%
+  unique() %>%
+  na.omit() %>%
+  arrange(padjBH)
+downregulated_peptides_gender <- sum(gendertablesignificant$estimate < 0)
+
+write_csv(gendertablesignificant, "Output files/gendertablesignificant.csv")
+
+```
+
+**Making summary tables for explanatory variables by peptide - pmi**
+```{r}
+
+pmitable <- linmodcont %>%
+  filter(term == "pmi") %>%
+  mutate(padjBH = p.adjust(p.value, method = "BH")) %>%
+  mutate(significance = ifelse(padjBH < 0.05, "significant", "ns"))
+
+#filter for most significant p-values
+pmitablesignificant <- pmitable %>%
+  filter(significance == "significant") %>%
+  arrange(padjBH) #sorts in order of smallest to largest p value (most significant comparisons shown first)
+
+pmitable <- merge(x = pmitable, y = nice_table[ , c("FullPeptideID", "FullPeptide")], by = "FullPeptide", all = TRUE)
+pmitable <- pmitable %>%
+  unique() %>%
+  na.omit()
+
+write_csv(pmitable, "Output files/pmitable.csv")
+
+pmitablesignificant <- merge(x = pmitablesignificant, y = nice_table[ , c("FullPeptideID", "FullPeptide")], by = "FullPeptide", all = TRUE)
+pmitablesignificant <- pmitablesignificant %>%
+  unique() %>%
+  na.omit() %>%
+  arrange(padjBH)
+downregulated_peptides_pmi <- sum(pmitablesignificant$estimate < 0)
+
+write_csv(pmitablesignificant, "Output files/pmitablesignificant.csv")
+
+```
+
+**Making summary tables for explanatory variables by peptide - education**
+```{r}
+
+eductable <- linmodcont %>%
+  filter(term == "educ") %>%
+  mutate(padjBH = p.adjust(p.value, method = "BH")) %>%
+  mutate(significance = ifelse(padjBH < 0.05, "significant", "ns"))
+
+#filter for most significant p-values
+eductablesignificant <- eductable %>%
+  filter(significance == "significant") %>%
+  arrange(padjBH) #sorts in order of smallest to largest p value (most significant comparisons shown first)
+
+eductable <- merge(x = eductable, y = nice_table[ , c("FullPeptideID", "FullPeptide")], by = "FullPeptide", all = TRUE)
+eductable <- eductable %>%
+  unique() %>%
+  na.omit()
+
+write_csv(eductable, "Output files/eductable.csv")
+
+eductablesignificant <- merge(x = eductablesignificant, y = nice_table[ , c("FullPeptideID", "FullPeptide")], by = "FullPeptide", all = TRUE)
+eductablesignificant <- eductablesignificant %>%
+  unique() %>%
+  na.omit() %>%
+  arrange(padjBH)
+downregulated_peptides_educ <- sum(eductablesignificant$estimate < 0)
+
+write_csv(eductablesignificant, "Output files/eductablesignificant.csv")
+
+```
+
+**Run continuous lm**
+```{r}
+
+#continuous linear model with global pathology and global cognition (+age, sex, pmi and education)
+
+#run lm
+cogvspath <- nice_table2 %>% 
+  nest_by(FullPeptide) %>%
+  mutate(LinearModelCont = list(lm(Quant ~ cogn_global_lv + gpath + age + gender + pmi + educ, data = data, na.action = na.omit))) %>%
+  summarise(tidy(LinearModelCont, conf.int = TRUE))
+
+#Makes the reference variables look nice
+cogvspath$Reference <- ifelse(cogvspath$term == 'genderm', "Female", " ")
+cogvspath <- cogvspath %>% 
+  relocate(Reference, .before=estimate) #move reference column to start to make it clearer
+
+#filter for most significant p-value (cognition)
+cogvspath_all <- cogvspath %>%
+  filter(term == "gpath" | term == "cogn_global_lv") %>% #should separate these
+  mutate(padjBH = p.adjust(p.value, method = "BH")) 
+
+cogvspath_all <- merge(x = cogvspath_all, y = nice_table[ , c("FullPeptideID", "FullPeptide")], by = "FullPeptide", all = TRUE)
+cogvspath_all <- cogvspath_all %>%
+  unique() %>%
+  na.omit() %>%
+  mutate(significance = ifelse(padjBH < 0.05, "significant", "ns"))
+
+write_csv(cogvspath_all, "Output files/cogvspath_all.csv")
+
+cogvspath_significant <- cogvspath_all %>%
+  mutate(significance = ifelse(padjBH < 0.05, "significant", "ns")) %>%
+  filter(significance == "significant") %>%
+  arrange(padjBH) 
+cogvspath_significant <- merge(x = cogvspath_significant, y = nice_table[ , c("FullPeptideID", "FullPeptide")], by = "FullPeptide", all = TRUE)
+cogvspath_significant <- cogvspath_significant %>%
+  unique() %>%
+  na.omit() %>%
+  arrange(padjBH)
+
+```
+
+**Making summary tables for explanatory variables by peptide - global cognition**
+```{r}
+
+#cognition table - make summary table
+cognition_cont <- cogvspath %>%
+  filter(term == "cogn_global_lv") %>%
+  mutate(padjBH = p.adjust(p.value, method = "BH")) %>%
+  mutate(significance = ifelse(padjBH < 0.05, "significant", "ns"))
+
+#filter for most significant p-values
+cognition_cont_significant <- cognition_cont %>%
+  filter(significance == "significant") %>%
+  arrange(padjBH) 
+
+cognition_cont <- merge(x = cognition_cont, y = nice_table[ , c("FullPeptideID", "FullPeptide")], by = "FullPeptide", all = TRUE)
+cognition_cont <- cognition_cont %>%
+  unique() %>%
+  na.omit()
+
+write_csv(cognition_cont, "Output files/cognition_cont.csv")
+
+cognition_cont_significant <- merge(x = cognition_cont_significant, y = nice_table[ , c("FullPeptideID", "FullPeptide")], by = "FullPeptide", all = TRUE)
+cognition_cont_significant <- cognition_cont_significant %>%
+  unique() %>%
+  na.omit() %>%
+  arrange(padjBH)
+downregulated_peptides_cogcont <- sum(cognition_cont_significant$estimate < 0)
+upregulated_peptides_cogcont <- sum(cognition_cont_significant$estimate > 0)
+
+write_csv(cognition_cont_significant, "Output files/continuous_linear_model_significantbycognition.csv")
+
+```
+
+**Making summary tables for explanatory variables by peptide - global pathology**
+```{r}
+
+#pathology table - make summary table
+pathology_cont <- cogvspath_all %>%
+  filter(term == "gpath") %>%
+  mutate(padjBH = p.adjust(p.value, method = "BH")) %>%
+  mutate(significance = ifelse(padjBH < 0.05, "significant", "ns"))
+
+pathology_cont_significant <- pathology_cont %>%
+  filter(significance == "significant") %>%
+  arrange(padjBH) 
+
+pathology_cont <- merge(x = pathology_cont, y = nice_table[ , c("FullPeptideID", "FullPeptide")], by = "FullPeptide", all = TRUE)
+pathology_cont <- pathology_cont %>%
+  unique() %>%
+  na.omit()
+
+write_csv(pathology_cont, "Output files/pathology_cont.csv")
+
+```
+
+**Upset plot - discrete lm**
+```{r}
+
+#install.packages('UpSetR')
+library(UpSetR)
+
+#create plot
+pdf(file = "Figures/UpSetPlot_discrete_new.pdf", width = 8, height = 5) 
+
+#create contrasts column
+class1tablesignificant <- class1tablesignificant %>% 
+  unite(contrasts, c(term, Reference), remove = FALSE)
+
+write_csv(class1tablesignificant, "Output files/class1tablesignificant.csv")
+
+class1tableall <- class1tableall %>% 
+  unite(contrasts, c(term, Reference), remove = FALSE)
+
+write_csv(class1tableall, "Output files/class1tableall.csv")
+
+#pivot from long --> wide
+upset_plot <- class1tablesignificant %>% 
+  select(FullPeptideID, contrasts, padjBH) %>%
+  pivot_wider(names_from = contrasts, values_from = padjBH, values_fill = NA)
+
+list_gen <- function(col){
+  upset_plot %>%
+    filter(!is.na(col)) %>%
+    pull(FullPeptideID)
+}
+
+sig_list <- apply(upset_plot[,-1], 2, list_gen)
+
+names(sig_list) <- c("Dementia vs Control", "Frail vs Resilient", "Frail vs Dementia", "Resilient vs Dementia", "Resilient vs Control", "Frail vs Control") #change names for plot
+
+upset(fromList(sig_list), order.by = "freq", nsets = 7, nintersects = 40)
+
+dev.off() 
+
+```
+
+**Upset plot - continuous lm**
+```{r}
+
+#install.packages('UpSetR')
+library(UpSetR)
+
+#create plot
+pdf(file = "Figures/UpSetPlot_cont.pdf", width = 8, height = 5) 
+
+#create contrasts column
+cogvspath_significant <- cogvspath_significant %>% 
+  unite(contrasts, c(term, Reference), remove = FALSE)
+
+cogvspath_all <- cogvspath_all %>% 
+  unite(contrasts, c(term, Reference), remove = FALSE)
+
+#pivot from long --> wide
+upset_plot_cont <- cogvspath_significant %>% 
+  select(FullPeptideID, contrasts, padjBH) %>%
+  pivot_wider(names_from = contrasts, values_from = padjBH, values_fill = NA)
+
+list_gen_cont <- function(col){
+  upset_plot_cont %>%
+    filter(!is.na(col)) %>%
+    pull(FullPeptideID)
+}
+
+sig_list_cont <- apply(upset_plot_cont[,-1], 2, list_gen_cont)
+
+names(sig_list_cont) <- c("Global pathology Z score", "Global cognition Z score") #change names for plot
+
+upset(fromList(sig_list_cont), order.by = "freq", nsets = 7, nintersects = 40)
+
+dev.off()
+
+```

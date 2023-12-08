@@ -1,0 +1,874 @@
+---
+title: "Chapter 3: Clustering analysis"
+output: html_document
+date: "2023-07-12"
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE) 
+
+```
+
+**Import data**
+```{r}
+
+nice_table <- read.csv("Output files/nice_table.csv")
+nice_table2 <- read.csv("Output files/nice_table2.csv")
+class1tablesignificant <- read.csv("Output files/class1tablesignificant.csv")
+class1tableall <- read.csv("Output files/class1tableall.csv")
+cognition_cont_significant <- read.csv("Output files/cognition_cont_significant.csv")
+
+library(openxlsx)
+
+#import specific parts of Johnson et al data
+file_path_bs <- "Input files/Johnson et al background set data for brain.xlsx"
+worksheet_name_bs <- "2.Master.PD.cleanDat.Stat.kME"
+backgroundset <- read.xlsx(file_path_bs, sheet = worksheet_name_bs, cols = c(3))
+
+```
+
+**Brain background set**
+```{r}
+
+allgenes <- as.data.frame(nice_table$GeneName)
+
+allgenes <- allgenes %>% 
+  rename(Symbol = "nice_table$GeneName") %>%
+  unique() %>%
+  separate_rows(Symbol, sep = "; ")
+
+backgroundset <- backgroundset %>% 
+  unique()
+
+only_in_allgenes <- anti_join(allgenes, backgroundset, by = "Symbol")
+
+brainbackground <- rbind(backgroundset, only_in_allgenes)
+
+write.csv(brainbackground, "Output files/brainbackground.csv")
+
+genes_not_in_bs <- setdiff(cognition_cont_significantDOWN$genes, brainbackground$Symbol) #check if there are missing genes
+
+```
+
+**Heatmap of all peptides**
+```{r}
+
+median_vals <- nice_table %>%
+  group_by(FullPeptideID) %>%
+  summarise(medians = median(Quant, na.rm = TRUE)) #doing this to replace NAs as hm cannot plot with NA
+
+nice_table <- merge(median_vals, nice_table, by = "FullPeptideID", all = TRUE) 
+
+nice_table_cluster <- nice_table %>%
+    select(SampleCode, FullPeptideID, Quant, medians) %>%
+    mutate_all(~ifelse(is.na(.x), medians, .x)) %>%
+    pivot_wider(names_from = SampleCode, values_from = Quant) %>%
+    column_to_rownames(var = "FullPeptideID") 
+
+key <- nice_table %>%
+  select(SampleCode, class1) %>%
+  unique() 
+
+dx_col = data.frame(sampleID=key$SampleCode, dx=key$class1, colour="#5e3c99",stringsAsFactors = F)
+dx_col$colour[key$class1 == "Dementia"] = "#e66101"
+dx_col$colour[key$class1 == "Frail"] = "#b2abd2"
+dx_col$colour[key$class1 == "Resilient"] = "#fdb863"
+
+#install.packages('gplots')
+library(gplots)
+
+pdf(file="Figures/wholeHM.pdf", width = 30, height = 7)
+
+hm <- heatmap.2(t(as.matrix(nice_table_cluster)), trace = "none", 
+          scale="col", 
+          col=colorRampPalette(c("steelblue","white","darkred"))(50),
+          RowSideColors=dx_col$colour[match(colnames(nice_table_cluster), dx_col$sampleID)])
+
+dev.off()
+
+```
+
+**Heatmaps for each pairwise contrast**
+````{r}
+
+#install.packages('gplots')
+library(gplots)
+
+#dementia vs control
+
+demvscont <- class1tablesignificant %>%
+  filter(contrasts == "class1Dementia_Control") #filter for specific contrast
+
+downregulateddemvscont <- sum(demvscont$estimate < 0)
+upregulateddemvscont <- sum(demvscont$estimate > 0)
+
+demvscont_nice_table <- nice_table %>%
+  filter(nice_table$FullPeptide %in% demvscont$FullPeptide) #find Quants in nice_table
+
+demvscont_nice_table <- demvscont_nice_table %>%
+  filter(class1 %in% c("Control", "Dementia")) #only want to keep Quants for comparison of interest
+
+demvscont_cluster <- demvscont_nice_table %>%
+    select(SampleCode, FullPeptideID, Quant, medians) %>%
+    mutate_all(~ifelse(is.na(.x), medians, .x)) %>%
+    pivot_wider(names_from = SampleCode, values_from = Quant) %>%
+    column_to_rownames(var = "FullPeptideID") 
+
+key <- demvscont_nice_table %>%
+  select(SampleCode, class1) %>%
+  unique() 
+
+demvscont_cluster <- demvscont_cluster %>%
+  select(-(medians))
+
+dx_col = data.frame(sampleID=key$SampleCode, dx=key$class1, colour="#5e3c99",stringsAsFactors = F)
+dx_col$colour[key$class1 == "Dementia"] = "#e66101"
+
+pdf(file="Figures/demvscontHM.pdf", width = 30, height = 20)
+
+hm <- heatmap.2(t(as.matrix(demvscont_cluster)), trace = "none", 
+          scale="col", 
+          col=colorRampPalette(c("steelblue","white","darkred"))(50),
+          RowSideColors=dx_col$colour[match(colnames(demvscont_cluster), dx_col$sampleID)])
+legend("bottomleft", legend = c("Dementia", "Control"), fill = c("#e66101", "#5e3c99"), cex = 1.5)
+dev.off()
+
+
+
+#frail vs dementia 
+
+frailvsdem <- class1tablesignificant %>%
+  filter(contrasts == "class1Frail_Dementia")
+
+downregulatedfrailvsdem <- sum(frailvsdem$estimate < 0)
+upregulateddfrailvsdem <- sum(frailvsdem$estimate > 0)
+
+frailvsdem_nice_table <- nice_table %>%
+  filter(nice_table$FullPeptide %in% frailvsdem$FullPeptide) #find Quants in nice_table
+
+frailvsdem_nice_table <- frailvsdem_nice_table %>%
+  filter(class1 %in% c("Frail", "Dementia")) #only want to keep Quants for comparison of interest
+
+frailvsdem_cluster <- frailvsdem_nice_table %>%
+    select(SampleCode, FullPeptideID, Quant, medians) %>%
+    mutate_all(~ifelse(is.na(.x), medians, .x)) %>%
+    pivot_wider(names_from = SampleCode, values_from = Quant) %>%
+    column_to_rownames(var = "FullPeptideID") 
+
+key <- frailvsdem_nice_table %>%
+  select(SampleCode, class1) %>%
+  unique() 
+
+frailvsdem_cluster <- frailvsdem_cluster %>%
+  select(-(medians))
+
+dx_col = data.frame(sampleID=key$SampleCode, dx=key$class1, colour="#5e3c99",stringsAsFactors = F)
+dx_col$colour[key$class1 == "Dementia"] = "#e66101"
+dx_col$colour[key$class1 == "Frail"] = "#b2abd2"
+
+pdf(file="Figures/frailvsdemHM.pdf", width = 30, height = 20)
+
+hm <- heatmap.2(t(as.matrix(frailvsdem_cluster)), trace = "none", 
+          scale="col", 
+          col=colorRampPalette(c("steelblue","white","darkred"))(50),
+          RowSideColors=dx_col$colour[match(colnames(frailvsdem_cluster), dx_col$sampleID)])
+legend("bottomleft", legend = c("Dementia", "Frail"), fill = c("#e66101", "#b2abd2"), cex = 1.5)
+dev.off()
+
+
+
+#frail vs resilient
+
+frailvsres <- class1tablesignificant %>%
+  filter(contrasts == "class1Frail_Resilient")
+
+downregulatedfrailvres <- sum(frailvsres$estimate < 0)
+upregulateddfrailvsres <- sum(frailvsres$estimate > 0)
+
+frailvsres_nice_table <- nice_table %>%
+  filter(nice_table$FullPeptide %in% frailvsres$FullPeptide) #find Quants in nice_table
+
+frailvsres_nice_table <- frailvsres_nice_table %>%
+  filter(class1 %in% c("Frail", "Resilient")) #only want to keep Quants for comparison of interest
+
+frailvsres_cluster <- frailvsres_nice_table %>%
+    select(SampleCode, FullPeptideID, Quant, medians) %>%
+    mutate_all(~ifelse(is.na(.x), medians, .x)) %>%
+    pivot_wider(names_from = SampleCode, values_from = Quant) %>%
+    column_to_rownames(var = "FullPeptideID") 
+
+key <- frailvsres_nice_table %>%
+  select(SampleCode, class1) %>%
+  unique() 
+
+dx_col = data.frame(sampleID=key$SampleCode, dx=key$class1, colour="#5e3c99",stringsAsFactors = F)
+dx_col$colour[key$class1 == "Frail"] = "#b2abd2"
+dx_col$colour[key$class1 == "Resilient"] = "#fdb863"
+
+pdf(file="Figures/frailvsresHM.pdf", width = 30, height = 20)
+
+frailvsres_cluster <- frailvsres_cluster %>%
+  select(-(medians))
+
+hm <- heatmap.2(t(as.matrix(frailvsres_cluster)), trace = "none", 
+          scale="col", 
+          col=colorRampPalette(c("steelblue","white","darkred"))(50),
+          RowSideColors=dx_col$colour[match(colnames(frailvsres_cluster), dx_col$sampleID)])
+legend("bottomleft", legend = c("Resilient", "Frail"), fill = c("#fdb863", "#b2abd2"), cex = 1.5)
+dev.off()
+
+
+
+#resilient vs dementia
+
+resvsdem <- class1tablesignificant %>%
+  filter(contrasts == "class1Resilient_Dementia")
+
+downregulatedresvdem <- sum(resvsdem$estimate < 0)
+upregulatedresvsdem <- sum(resvsdem$estimate > 0)
+
+resvsdem_nice_table <- nice_table %>%
+  filter(nice_table$FullPeptide %in% resvsdem$FullPeptide) #find Quants in nice_table
+
+resvsdem_nice_table <- resvsdem_nice_table %>%
+  filter(class1 %in% c("Resilient", "Dementia")) #only want to keep Quants for comparison of interest
+
+resvsdem_cluster <- resvsdem_nice_table %>%
+    select(SampleCode, FullPeptideID, Quant, medians) %>%
+    mutate_all(~ifelse(is.na(.x), medians, .x)) %>%
+    pivot_wider(names_from = SampleCode, values_from = Quant) %>%
+    column_to_rownames(var = "FullPeptideID") 
+
+key <- resvsdem_nice_table %>%
+  select(SampleCode, class1) %>%
+  unique() 
+
+resvsdem_cluster <- resvsdem_cluster %>%
+  select(-(medians))
+
+dx_col = data.frame(sampleID=key$SampleCode, dx=key$class1, colour="#5e3c99",stringsAsFactors = F)
+dx_col$colour[key$class1 == "Dementia"] = "#e66101"
+dx_col$colour[key$class1 == "Resilient"] = "#fdb863"
+
+pdf(file="Figures/resvsdemHM.pdf", width = 30, height = 20)
+
+hm <- heatmap.2(t(as.matrix(resvsdem_cluster)), trace = "none", 
+          scale="col", 
+          col=colorRampPalette(c("steelblue","white","darkred"))(50),
+          RowSideColors=dx_col$colour[match(colnames(resvsdem_cluster), dx_col$sampleID)])
+legend("bottomleft", legend = c("Resilient", "Dementia"), fill = c("#fdb863", "#e66101"), cex = 1.5)
+dev.off()
+
+
+
+#resilient vs control
+
+resvscont <- class1tablesignificant %>%
+  filter(contrasts == "class1Resilient_Control")
+
+downregulatedresvcont <- sum(resvscont$estimate < 0)
+upregulatedresvscont <- sum(resvscont$estimate > 0)
+
+resvscont_nice_table <- nice_table %>%
+  filter(nice_table$FullPeptide %in% resvscont$FullPeptide) #find Quants in nice_table
+
+resvscont_nice_table <- resvscont_nice_table %>%
+  filter(class1 %in% c("Resilient", "Control")) #only want to keep Quants for comparison of interest
+
+resvscont_cluster <- resvscont_nice_table %>%
+    select(SampleCode, FullPeptideID, Quant, medians) %>%
+    mutate_all(~ifelse(is.na(.x), medians, .x)) %>%
+    pivot_wider(names_from = SampleCode, values_from = Quant) %>%
+    column_to_rownames(var = "FullPeptideID") 
+
+key <- resvscont_nice_table %>%
+  select(SampleCode, class1) %>%
+  unique() 
+
+resvscont_cluster <- resvscont_cluster %>%
+  select(-(medians))
+
+dx_col = data.frame(sampleID=key$SampleCode, dx=key$class1, colour="#5e3c99",stringsAsFactors = F)
+dx_col$colour[key$class1 == "Resilient"] = "#fdb863"
+
+pdf(file="Figures/resvscontHM.pdf", width = 30, height = 20)
+
+hm <- heatmap.2(t(as.matrix(resvscont_cluster)), trace = "none", 
+          scale="col", 
+          col=colorRampPalette(c("steelblue","white","darkred"))(50),
+          RowSideColors=dx_col$colour[match(colnames(resvscont_cluster), dx_col$sampleID)])
+legend("bottomleft", legend = c("Resilient", "Control"), fill = c("#fdb863", "#5e3c99"), cex = 1.5)
+dev.off()
+
+
+
+#frail vs control
+
+frailvscont <- class1tablesignificant %>%
+  filter(contrasts == "class1Frail_Control")
+
+downregulatedfrailvcont <- sum(frailvscont$estimate < 0)
+upregulateddfrailvscont <- sum(frailvscont$estimate > 0)
+
+frailvscont_nice_table <- nice_table %>%
+  filter(nice_table$FullPeptide %in% frailvscont$FullPeptide) #find Quants in nice_table
+
+frailvscont_nice_table <- frailvscont_nice_table %>%
+  filter(class1 %in% c("Frail", "Control")) #only want to keep Quants for comparison of interest
+
+frailvscont_cluster <- frailvscont_nice_table %>%
+    select(SampleCode, FullPeptideID, Quant, medians) %>%
+    mutate_all(~ifelse(is.na(.x), medians, .x)) %>%
+    pivot_wider(names_from = SampleCode, values_from = Quant) %>%
+    column_to_rownames(var = "FullPeptideID") 
+
+key <- frailvscont_nice_table %>%
+  select(SampleCode, class1) %>%
+  unique() 
+
+frailvscont_cluster <- frailvscont_cluster %>%
+  select(-(medians))
+
+dx_col = data.frame(sampleID=key$SampleCode, dx=key$class1, colour="#5e3c99",stringsAsFactors = F)
+dx_col$colour[key$class1 == "Frail"] = "#b2abd2"
+
+pdf(file="Figures/frailvscontHM.pdf", width = 30, height = 20)
+
+hm <- heatmap.2(t(as.matrix(frailvscont_cluster)), trace = "none", 
+          scale="col", 
+          col=colorRampPalette(c("steelblue","white","darkred"))(50),
+          RowSideColors=dx_col$colour[match(colnames(frailvscont_cluster), dx_col$sampleID)])
+legend("bottomleft", legend = c("Frail", "Control"), fill = c("#b2abd2", "#5e3c99"), cex = 1.5)
+dev.off()
+
+```
+
+**STRING output**
+```{r}
+
+#merge peptides significant in discrete (frail vs control) and continuous (associated with cognition)
+frailvscontandcognition <- merge(frailvscont, cognition_cont_significant, by = "FullPeptideID") #cont and discrete outcomes merged
+
+frailvscontandcognition_Figure <- frailvscontandcognition %>%
+  mutate(genes = str_extract(FullPeptideID, "^[^_]+")) %>%
+  select(estimate.y, padjBH.y, FullPeptideID) %>%
+  arrange(padjBH.y)
+write.csv(frailvscontandcognition_Figure, "Output files/frailvscontandcognition_Figure.csv")
+
+frailvscontandcognition_STRING <- frailvscontandcognition %>%
+  select(estimate.y, padjBH.y, FullPeptideID) %>%
+  mutate(genes = str_extract(FullPeptideID, "^[^_]+")) %>%
+  arrange(padjBH.y) %>%
+  distinct(genes, .keep_all = TRUE)
+write.csv(frailvscontandcognition_STRING$genes, "Output files/frailvscontandcognition_STRING.csv")
+
+frailvscont2 <- frailvscont %>%
+  mutate(genes = str_extract(FullPeptideID, "^[^_]+")) %>%
+  distinct(genes, .keep_all = TRUE)
+write.csv(frailvscont2$genes, "Output files/bigSTRINGfvc.csv")
+
+frailvscont2$uppeptides <- ifelse(frailvscont2$estimate > 0, frailvscont2$FullPeptideID, " ")
+frailvscont2UP <- as.data.frame(frailvscont2$uppeptides)
+frailvscont2UP$genes <- str_extract(frailvscont2UP$"frailvscont2$uppeptides", "^[^_]+")
+frailvscont2UP <- frailvscont2UP %>%
+  distinct(genes, .keep_all = TRUE)
+write.csv(frailvscont2UP, "Output files/frailvscont2UP.csv") 
+
+frailvscont2$downpeptides <- ifelse(frailvscont2$estimate < 0, frailvscont2$FullPeptideID, " ")
+frailvscont2DOWN <- as.data.frame(frailvscont2$downpeptides)
+frailvscont2DOWN$genes <- str_extract(frailvscont2DOWN$"frailvscont2$downpeptides", "^[^_]+")
+frailvscont2DOWN <- frailvscont2DOWN %>%
+  distinct(genes, .keep_all = TRUE)
+write.csv(frailvscont2DOWN, "Output files/frailvscont2DOWN.csv") 
+
+resvsdem2 <- resvsdem %>%
+  mutate(genes = str_extract(FullPeptideID, "^[^_]+")) %>%
+  distinct(genes, .keep_all = TRUE)
+write.csv(resvsdem2$genes, "Output files/bigSTRINGrvd.csv")
+
+resvsdem2$uppeptides <- ifelse(resvsdem2$estimate > 0, resvsdem2$FullPeptideID, " ")
+resvsdem2UP <- as.data.frame(resvsdem2$uppeptides)
+resvsdem2UP$genes <- str_extract(resvsdem2UP$"resvsdem2$uppeptides", "^[^_]+")
+resvsdem2UP <- resvsdem2UP %>%
+  distinct(genes, .keep_all = TRUE)
+write.csv(resvsdem2UP, "Output files/resvsdem2UP.csv") 
+
+resvsdem2$downpeptides <- ifelse(resvsdem2$estimate < 0, resvsdem2$FullPeptideID, " ")
+resvsdem2DOWN <- as.data.frame(resvsdem2$downpeptides)
+resvsdem2DOWN$genes <- str_extract(resvsdem2DOWN$"resvsdem2$downpeptides", "^[^_]+")
+resvsdem2DOWN <- resvsdem2DOWN %>%
+  distinct(genes, .keep_all = TRUE)
+write.csv(resvsdem2DOWN, "Output files/resvsdem2DOWN.csv") 
+
+
+#merge peptides significant in discrete (resilient vs dementia) and continuous (associated with cognition)
+resvsdemandcognition <- merge(resvsdem, cognition_cont_significant, by = "FullPeptideID") #cont and discrete outcomes merged 
+
+resvsdemandcognition_Figure <- resvsdemandcognition %>%
+  mutate(genes = str_extract(FullPeptideID, "^[^_]+")) %>%
+  select(estimate.y, padjBH.y, FullPeptideID) %>%
+  arrange(padjBH.y)
+write.csv(resvsdemandcognition_Figure, "Output files/resvsdemandcognition_Figure.csv")
+
+resvsdemandcognition_STRING <- resvsdemandcognition %>%
+  select(estimate.y, padjBH.y, FullPeptideID) %>%
+  mutate(genes = str_extract(FullPeptideID, "^[^_]+")) %>%
+  arrange(padjBH.y) %>%
+  distinct(genes, .keep_all = TRUE)
+write.csv(resvsdemandcognition, "Output files/resvsdemandcognition_STRING.csv")
+
+outputforSTRING <- rbind(frailvscontandcognition_STRING, resvsdemandcognition_STRING)
+outputforSTRING <- outputforSTRING %>%
+  select(genes, estimate.y)
+
+
+#frailvscont horizontal box
+
+frailvscontandcognition$FullPeptideID <- as.factor(frailvscontandcognition$FullPeptideID)
+
+fac_order2 <- c("NEFM_SEME_10", "CRYM_EPSN_8", "CHGA_HSGF_33", "CHGB_APRP_14", "CHGA_WSKM_11", "PALM_ITGV_25", "CHGB_NYPS_8", "CCK_PAGS_13", "CHGA_LEGQ_18", "CHGA_AVEE_10", "CHGB_NLAR_8", "TUBA8_VDNE_7", "CCK_TDGE_13", "CCK_PAGS_16", "CCK_SAEE_9", "DBN1_APEP_11", "MIF_FGGS_11", "ITSN1_APVP_12", "TUBB_HSLG_13",  "VIM_SSVP_23", "VAMP2_RDQK_24", "MAP2_HPPE_17")
+
+frailvscontandcognition$FullPeptideID <- factor(frailvscontandcognition$FullPeptideID, levels = fac_order2)
+
+fvc_estimates <- ggplot(data = frailvscontandcognition, aes(x = estimate.y, y = FullPeptideID, xmin = conf.low, xmax = conf.high)) +
+  geom_pointrange(position = position_dodge(width = 0.2), color = "black") +
+  geom_point(position = position_dodge(width = 0.2), color = "purple1", size = 2) +
+  labs(title = "Peptides differentially enriched in frail vs control contrast", x = "Estimate", y = "Peptide") +
+  theme_classic() +
+  geom_vline(xintercept = 0, linetype = "dotted", color = "darkgrey")
+
+ggsave("Figures/fvc_estimates.pdf", plot = fvc_estimates, device = "pdf", width = 7, height = 5, units = "in", dpi = 300) 
+
+
+#resvsdem horizontal box
+
+resvsdemandcognition$FullPeptideID <- replace(resvsdemandcognition$FullPeptideID, is.na(resvsdemandcognition$FullPeptideID), "IGHV3-48_EVQL_22")
+resvsdemandcognition$FullPeptideID <- as.factor(resvsdemandcognition$FullPeptideID)
+
+
+fac_order3 <- c("VCL_PVFH_19", "TAC1_ALNS_16", "H2AW_IAQG_13", "VGF_NAPP_19", 
+"IGHV3-48_EVQL_22", "VGF_NSEP_16", "RPSA_EWVG_10", "VGF_APPG_40", "SST_AGCK_14", "VGF_GLQE_21", "ATP5F1D_AEAA_24", "MAP2_HPPE_17", "VGF_APPG_37", "VGF_RLQE_20", "VGF_TLQP_8", "GDI1_VLGT_9", "HNRNPA2B1_YGGG_8")
+
+resvsdemandcognition$FullPeptideID <- factor(resvsdemandcognition$FullPeptideID, levels = fac_order3)
+
+rvd_estimates <- ggplot(data = resvsdemandcognition, aes(x = estimate.y, y = FullPeptideID, xmin = conf.low, xmax = conf.high)) +
+  geom_pointrange(position = position_dodge(width = 0.2), color = "black") +
+  geom_point(position = position_dodge(width = 0.2), color = "orange1", size = 2) +
+  labs(title = "Peptides differentially enriched in resilient vs dementia contrast", x = "Estimate", y = "Peptide") +
+  theme_classic() +
+  geom_vline(xintercept = 0, linetype = "dotted", color = "darkgrey")
+
+ggsave("Figures/rvd_estimates.pdf", plot = rvd_estimates, device = "pdf", width = 7, height = 5, units = "in", dpi = 300) 
+
+
+```
+
+**Volcano plot of DEPs**
+```{r}
+
+#colour scheme website https://colorbrewer2.org/#type=sequential&scheme=Greys&n=3
+
+#install.packages("ggrepel")
+library(ggrepel)
+
+#resilient vs dementia
+
+resvsdemall <- class1tableall %>%
+  filter(contrasts == "class1Resilient_Dementia") #filter for specific contrast
+
+resvsdem_volcano <- resvsdemall %>%
+  select(c(FullPeptideID, p.value, padjBH, significance, estimate))
+
+resvsdem_ntall <- nice_table %>%
+  filter(nice_table$FullPeptide %in% resvsdemall$FullPeptide) #find Quants in nice_table
+
+resvsdem_ntall <- resvsdem_ntall %>%
+  filter(class1 %in% c("Resilient", "Dementia")) #only want to keep Quants for comparison of interest
+
+rvd_resilient_data <- resvsdem_ntall %>%
+  filter(class1 == "Resilient") %>%
+  select(Quant, FullPeptideID) %>%
+  group_by(FullPeptideID) %>%
+  summarise(mean_Quant_resilient = mean(Quant, na.rm = TRUE))
+rvd_resilient_data <- as.data.frame(rvd_resilient_data)
+
+rvd_dementia_data <- resvsdem_ntall %>%
+  filter(class1 == "Dementia") %>%
+  select(Quant, FullPeptideID) %>%
+  group_by(FullPeptideID) %>%
+  summarise(mean_Quant_Dementia = mean(Quant, na.rm = TRUE))
+rvd_dementia_data <- as.data.frame(rvd_dementia_data)
+
+resvsdemQuant <- merge(rvd_resilient_data, rvd_dementia_data, by = "FullPeptideID")
+
+resvsdemQuant$foldchange <- (resvsdemQuant$mean_Quant_resilient-resvsdemQuant$mean_Quant_Dementia)
+
+resvsdem_volcano <- merge(resvsdem_volcano, resvsdemQuant, by = "FullPeptideID")
+resvsdem_volcano$diffs <- ifelse(resvsdem_volcano$significance == 'significant' & resvsdem_volcano$estimate < 0, "depleted", "enriched")
+resvsdem_volcano$diffs <- ifelse(resvsdem_volcano$significance == 'ns', "ns", resvsdem_volcano$diffs) #ask Becky better way to do this
+resvsdem_volcano <- resvsdem_volcano %>%
+  arrange(p.value)
+
+resvsdemvolc = ggplot(data = resvsdem_volcano, aes(x = foldchange, y = -log10(p.value), color = diffs)) + geom_point() + 
+                scale_color_manual(values=c("#a6bddb", "#1c9099", "#bdbdbd")) + 
+                ggtitle("Resilient vs Dementia") + labs(x = "Fold change - enriched in resilient") + theme_classic() +
+  theme(
+    plot.title = element_text(face = "bold", size = 30), 
+    axis.title.x = element_text(size = 25),
+    axis.text.x = element_text(size = 20),
+    axis.text.y = element_text(size = 20),
+    axis.title.y = element_text(size = 25)  
+  ) 
+
+resvsdemvolc = resvsdemvolc + geom_text_repel(data = head(resvsdem_volcano, 24), aes(label = FullPeptideID), color = "black", size = 5,   box.padding = 0.5,  
+  point.padding = 0.8,
+  segment.color = "grey", 
+  segment.size = 0.3    
+)
+
+#labels the top 24 DEGs
+
+ggsave("Figures/resvsdemvolc.pdf", plot = resvsdemvolc, device = "pdf", width = 11, height = 8, units = "in", dpi = 300) 
+
+
+#frail vs control
+
+frailvscontall <- class1tableall %>%
+  filter(contrasts == "class1Frail_Control") #filter for specific contrast
+
+frailvscont_volcano <- frailvscontall %>%
+  select(c(FullPeptideID, p.value, padjBH, significance, estimate))
+
+frailvscont_ntall <- nice_table %>%
+  filter(nice_table$FullPeptide %in% frailvscontall$FullPeptide) #find Quants in nice_table
+
+frailvscont_ntall <- frailvscont_ntall %>%
+  filter(class1 %in% c("Frail", "Control")) #only want to keep Quants for comparison of interest
+
+fvc_frail_data <- frailvscont_ntall %>%
+  filter(class1 == "Frail") %>%
+  select(Quant, FullPeptideID) %>%
+  group_by(FullPeptideID) %>%
+  summarise(mean_Quant_frail = mean(Quant, na.rm = TRUE))
+fvc_frail_data <- as.data.frame(fvc_frail_data)
+
+fvc_control_data <- frailvscont_ntall %>%
+  filter(class1 == "Control") %>%
+  select(Quant, FullPeptideID) %>%
+  group_by(FullPeptideID) %>%
+  summarise(mean_Quant_control = mean(Quant, na.rm = TRUE))
+fvc_control_data <- as.data.frame(fvc_control_data)
+
+frailvscontQuant <- merge(fvc_frail_data, fvc_control_data, by = "FullPeptideID")
+
+frailvscontQuant$foldchange <- (frailvscontQuant$mean_Quant_frail-frailvscontQuant$mean_Quant_control)
+
+frailvscont_volcano <- merge(frailvscont_volcano, frailvscontQuant, by = "FullPeptideID")
+frailvscont_volcano$diffs <- ifelse(frailvscont_volcano$significance == 'significant' & frailvscont_volcano$estimate < 0, "depleted", "enriched")
+frailvscont_volcano$diffs <- ifelse(frailvscont_volcano$significance == 'ns', "ns", frailvscont_volcano$diffs) #ask Becky better way to do this
+frailvscont_volcano <- frailvscont_volcano %>%
+  arrange(p.value)
+
+frailvscontvolc = ggplot(data = frailvscont_volcano, aes(x = foldchange, y = -log10(p.value), color = diffs)) + geom_point() + 
+                scale_color_manual(values=c("#a6bddb", "#1c9099", "#bdbdbd")) + 
+                ggtitle("Frail vs Control") + labs(x = "Fold change - enriched in frail") + theme_classic() +
+  theme(
+    plot.title = element_text(face = "bold", size = 30), 
+    axis.title.x = element_text(size = 25),
+    axis.text.x = element_text(size = 20),
+    axis.text.y = element_text(size = 20),
+    axis.title.y = element_text(size = 25)  
+  ) 
+
+
+frailvscontvolc = frailvscontvolc + geom_text_repel(data = head(frailvscont_volcano, 24), aes(label = FullPeptideID), color = "black", size = 5, color = "black", size = 4,   box.padding = 0.5,  
+  point.padding = 0.8,
+  segment.color = "grey", 
+  segment.size = 0.3    
+)
+
+#labels the top 24 DEGs
+
+ggsave("Figures/frailvscontvolc.pdf", plot = frailvscontvolc, device = "pdf", width = 11, height = 8, units = "in", dpi = 300) 
+
+
+#7 - cognition as continuous variable
+
+cogvspath_all <- merge(x = cogvspath_all, y = nice_table[ , c("FullPeptideID", "FullPeptide")], by = "FullPeptide", all = TRUE)
+cogvspath_all <- cogvspath_all %>%
+  unique() %>%
+  na.omit()
+
+cogvspath_all <- cogvspath_all %>%
+  mutate(significance = ifelse(padjBH < 0.05, "significant", "ns"))
+
+cogupdown <- cogvspath_all %>%
+  filter(term == "cogn_global_lv") #filter for specific contrast
+
+cogupdown_volcano <- cogupdown %>%
+  select(c(FullPeptideID, p.value, padjBH, significance, estimate)) #everything needed is in this table
+
+cogupdown_volcano$diffs <- ifelse(cogupdown_volcano$significance == 'significant' & cogupdown_volcano$estimate < 0, "depleted", "enriched")
+cogupdown_volcano$diffs <- ifelse(cogupdown_volcano$significance == 'ns', "ns", cogupdown_volcano$diffs) 
+cogupdown_volcano <- cogupdown_volcano %>%
+  arrange(p.value)
+
+cognitionVolc = ggplot(data = cogupdown_volcano, aes(x = estimate, y = -log10(p.value), color = diffs)) + geom_point() + 
+                scale_color_manual(values=c("#a6bddb", "#bdbdbd", "#1c9099")) + 
+                ggtitle("Differentially enriched peptides - Cognition") + labs(x = "Coefficient estimate") + theme_classic() +
+  theme(
+    plot.title = element_text(face = "bold", size = 30), 
+    axis.title.x = element_text(size = 25),
+    axis.text.x = element_text(size = 20),
+    axis.text.y = element_text(size = 20),
+    axis.title.y = element_text(size = 25)  
+  ) 
+
+
+cognitionVolc = cognitionVolc + geom_text_repel(data = head(cogupdown_volcano, 20), aes(label = FullPeptideID), color = "black", size = 5, color = "black", size = 4,   box.padding = 0.5,  
+  point.padding = 0.8,
+  segment.color = "grey", 
+  segment.size = 0.3    
+)
+
+
+ggsave("Figures/cognitionVolc.pdf", plot = cognitionVolc, device = "pdf", width = 11, height = 8, units = "in", dpi = 300) 
+
+
+#8 - pathology as continuous variable
+
+pathupdown <- cogvspath_all %>%
+  filter(term == "gpath") #filter for specific contrast
+
+pathupdown_volcano <- pathupdown %>%
+  select(c(FullPeptideID, p.value, padjBH, significance, estimate)) #everything needed is in this table
+
+pathupdown_volcano$diffs <- ifelse(pathupdown_volcano$significance == 'significant' & pathupdown_volcano$estimate < 0, "depleted", "enriched")
+pathupdown_volcano$diffs <- ifelse(pathupdown_volcano$significance == 'ns', "ns", pathupdown_volcano$diffs) 
+pathupdown_volcano <- pathupdown_volcano %>%
+  arrange(p.value)
+
+pathVolc = ggplot(data = pathupdown_volcano, aes(x = estimate, y = -log10(p.value), color = diffs)) + geom_point() + 
+                scale_color_manual(values=c("#a6bddb", "#bdbdbd", "#1c9099")) + 
+                ggtitle("Differentially enriched peptides - Pathology") + labs(x = "Coefficient estimate") + theme_classic() +
+  theme(
+    plot.title = element_text(face = "bold", size = 30), 
+    axis.title.x = element_text(size = 25),
+    axis.text.x = element_text(size = 20),
+    axis.text.y = element_text(size = 20),
+    axis.title.y = element_text(size = 25)  
+  ) 
+
+
+pathVolc = pathVolc + geom_text_repel(data = head(pathupdown_volcano, 20), aes(label = FullPeptideID), color = "black", size = 5, color = "black", size = 4,   box.padding = 0.5,  
+  point.padding = 0.8,
+  segment.color = "grey", 
+  segment.size = 0.3    
+)
+
+ggsave("Figures/pathVolc.pdf", plot = pathVolc, device = "pdf", width = 11, height = 8, units = "in", dpi = 300) 
+
+
+```
+
+
+**Gene Ontology Heatmaps**
+```{r}
+
+#import tables
+GOfvc <- read.xlsx("Input files/Frail vs control all STRING outcomes.xlsx")
+GOrvd <- read.xlsx("Input files/Resilient vs dementia all STRING outcomes.xlsx")
+
+#1 - find average quant for each protein
+
+meanquants <- nice_table2 %>%
+  group_by(SampleCode, GeneName) %>%
+  summarise_at(vars(Quant), list(means = mean), na.rm = TRUE) %>% #this is a list of mean protein quants for each person. some NaNs left where there are no values for a given protein in a sample, so remove
+  drop_na()
+
+#2 - convert STRING table to a long table that has GO term in one column, and a gene name in column 2 (so 17 rows of that GO term in column one for a GO term that had 17 different proteins in it)
+
+GOfvc_long <- GOfvc %>%
+  select(term.description, `matching.proteins.in.your.network.(labels)`) %>%
+  separate_rows(`matching.proteins.in.your.network.(labels)`, sep = ",") %>%
+  rename(GeneName = `matching.proteins.in.your.network.(labels)`)
+
+GOrvd_long <- GOrvd %>%
+  select(term.description, `matching.proteins.in.your.network.(labels)`) %>%
+  separate_rows(`matching.proteins.in.your.network.(labels)`, sep = ",") %>%
+  rename(GeneName = `matching.proteins.in.your.network.(labels)`)
+
+#3 - merge it with the quants table on the geneID
+
+GOfvc_long_merge <- merge(GOfvc_long, meanquants, by = "GeneName", all = FALSE)
+GOrvd_long_merge <- merge(GOrvd_long, meanquants, by = "GeneName", all = FALSE)
+
+#get frail and control/res and dem people
+
+fvc_samples <- nice_table2 %>%
+  select(SampleCode, class1) %>%
+  unique() %>%
+  filter(class1 %in% c("Frail", "Control"))
+
+GOfvc_long_merge <- merge(GOfvc_long_merge, fvc_samples, by = "SampleCode", all = FALSE)
+
+rvd_samples <- nice_table2 %>%
+  select(SampleCode, class1) %>%
+  unique() %>%
+  filter(class1 %in% c("Resilient", "Dementia"))
+
+GOrvd_long_merge <- merge(GOrvd_long_merge, rvd_samples, by = "SampleCode", all = FALSE)
+
+
+#4 - get one summary value for each GO term for each sample
+
+GOfvc_long_merge_grouped <- GOfvc_long_merge %>%
+  group_by(SampleCode, term.description) %>%
+  summarise_at(vars(means), list(means2 = mean))
+
+GOrvd_long_merge_grouped <- GOrvd_long_merge %>%
+  group_by(SampleCode, term.description) %>%
+  summarise_at(vars(means), list(means2 = mean))
+
+#5 - matrix with sample ID in colnames, GO term in rownames
+
+GOfvc_cluster <- GOfvc_long_merge_grouped %>%
+  pivot_wider(names_from = SampleCode, values_from = means2) %>%
+  column_to_rownames(var = "term.description") 
+
+GOfvc_cluster <- as.matrix(GOfvc_cluster)
+
+GOrvd_cluster <- GOrvd_long_merge_grouped %>%
+  pivot_wider(names_from = SampleCode, values_from = means2) %>%
+  column_to_rownames(var = "term.description") 
+
+GOrvd_cluster <- as.matrix(GOrvd_cluster)
+
+#make heatmap fvc - all
+
+key <- frailvscont_nice_table %>%
+  select(SampleCode, class1) %>%
+  unique() 
+
+dx_col = data.frame(sampleID=key$SampleCode, dx=key$class1, colour="#5e3c99",stringsAsFactors = F)
+dx_col$colour[key$class1 == "Frail"] = "#b2abd2"
+
+pdf(file="Figures/GOfvc_cluster.pdf", width = 30, height = 20)
+
+hm <- heatmap.2(t(GOfvc_cluster), trace = "none", 
+          scale="col", 
+          col=colorRampPalette(c("steelblue","white","darkred"))(50),
+          RowSideColors=dx_col$colour[match(colnames(GOfvc_cluster), dx_col$sampleID)])
+legend("topright", legend = c("Control", "Frail"), fill = c("#5e3c99", "#b2abd2"), cex = 1.5)
+
+dev.off()
+
+
+#make heatmap rvd - all
+
+key <- resvsdem_nice_table %>%
+  select(SampleCode, class1) %>%
+  unique() 
+
+dx_col = data.frame(sampleID=key$SampleCode, dx=key$class1, colour="#5e3c99",stringsAsFactors = F)
+dx_col$colour[key$class1 == "Dementia"] = "#e66101"
+dx_col$colour[key$class1 == "Resilient"] = "#fdb863"
+
+pdf(file="Figures/GOrvd_cluster.pdf", width = 20, height = 12)
+
+hm <- heatmap.2(t(GOrvd_cluster), trace = "none", 
+          scale="col", keysize = 0.7, margins = c(30, 20), labRow = FALSE,
+          col=colorRampPalette(c("steelblue","white","darkred"))(50),
+          RowSideColors=dx_col$colour[match(colnames(GOrvd_cluster), dx_col$sampleID)])
+
+dev.off()
+
+
+#filter for molecular function things & subcellular localisation things only - RVD
+
+GOrvd_filter <- GOrvd %>%
+  rename(category = `#category`) %>%
+  #filter(strength > 0.8) %>%
+  filter(category %in% c("COMPARTMENTS"))
+
+GOrvd_filter_long <- GOrvd_filter %>%
+  select(term.description, `matching.proteins.in.your.network.(labels)`) %>%
+  separate_rows(`matching.proteins.in.your.network.(labels)`, sep = ",") %>%
+  rename(GeneName = `matching.proteins.in.your.network.(labels)`)
+
+GOrvd_filter_long_merge <- merge(GOrvd_filter_long, meanquants, by = "GeneName", all = FALSE)
+
+GOrvd_filter_long_merge <- merge(GOrvd_filter_long_merge, rvd_samples, by = "SampleCode", all = FALSE)
+
+GOrvd_filter_long_merge_grouped <- GOrvd_filter_long_merge %>%
+  group_by(SampleCode, term.description) %>%
+  summarise_at(vars(means), list(means2 = mean))
+
+GOrvd_filter_cluster <- GOrvd_filter_long_merge_grouped %>%
+  pivot_wider(names_from = SampleCode, values_from = means2) %>%
+  column_to_rownames(var = "term.description") 
+
+GOrvd_filter_cluster <- as.matrix(GOrvd_filter_cluster)
+
+key <- resvsdem_nice_table %>%
+  select(SampleCode, class1) %>%
+  unique() 
+
+dx_col = data.frame(sampleID=key$SampleCode, dx=key$class1, colour="#5e3c99",stringsAsFactors = F)
+dx_col$colour[key$class1 == "Dementia"] = "#e66101"
+dx_col$colour[key$class1 == "Resilient"] = "#fdb863"
+
+pdf(file="Figures/GOrvd_cluster_filter.pdf", width = 20, height = 12)
+
+hm <- heatmap.2(t(GOrvd_filter_cluster), trace = "none", 
+          scale="col", keysize = 0.7, margins = c(30, 20), labRow = FALSE, cexCol = 1.5,
+          col=colorRampPalette(c("steelblue","white","darkred"))(50),
+          RowSideColors=dx_col$colour[match(colnames(GOrvd_filter_cluster), dx_col$sampleID)])
+
+dev.off()
+
+
+#filter for molecular function things & subcellular localisation things only - FVC
+
+GOfvc_filter <- GOfvc %>%
+  rename(category = `#category`) %>%
+  #filter(strength > 0.8) %>%
+  filter(category %in% c("COMPARTMENTS"))
+
+GOfvc_filter_long <- GOfvc_filter %>%
+  select(term.description, `matching.proteins.in.your.network.(labels)`) %>%
+  separate_rows(`matching.proteins.in.your.network.(labels)`, sep = ",") %>%
+  rename(GeneName = `matching.proteins.in.your.network.(labels)`)
+
+GOfvc_filter_long_merge <- merge(GOfvc_filter_long, meanquants, by = "GeneName", all = FALSE)
+
+GOfvc_filter_long_merge <- merge(GOfvc_filter_long_merge, fvc_samples, by = "SampleCode", all = FALSE)
+
+GOfvc_filter_long_merge_grouped <- GOfvc_filter_long_merge %>%
+  group_by(SampleCode, term.description) %>%
+  summarise_at(vars(means), list(means2 = mean))
+
+GOfvc_filter_cluster <- GOfvc_filter_long_merge_grouped %>%
+  pivot_wider(names_from = SampleCode, values_from = means2) %>%
+  column_to_rownames(var = "term.description") 
+
+GOfvc_filter_cluster <- as.matrix(GOfvc_filter_cluster)
+
+key <- frailvscont_nice_table %>%
+  select(SampleCode, class1) %>%
+  unique() 
+
+dx_col = data.frame(sampleID=key$SampleCode, dx=key$class1, colour="#5e3c99",stringsAsFactors = F)
+dx_col$colour[key$class1 == "Frail"] = "#b2abd2"
+
+pdf(file="Figures/GOfvc_filter_cluster.pdf", width = 20, height = 12)
+
+hm <- heatmap.2(t(GOfvc_filter_cluster), trace = "none", 
+          scale="col", keysize = 0.7, margins = c(30, 20), labRow = FALSE, cexCol = 2,
+          col=colorRampPalette(c("steelblue","white","darkred"))(50),
+          RowSideColors=dx_col$colour[match(colnames(GOfvc_filter_cluster), dx_col$sampleID)])
+
+dev.off()
+
+```
